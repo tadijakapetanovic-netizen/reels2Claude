@@ -7,9 +7,11 @@ import { test } from 'node:test';
 import { loadConfig, parseEnv, readTextFile, selectProvider } from '../skills/reel/scripts/lib/config.mjs';
 import {
   classifyDownloadError,
+  collectDownloads,
   detectPlatform,
   formatClock,
   frameDifference,
+  isTikTokPhotoPost,
   metaFromInfo,
   pickFrameTimes,
 } from '../skills/reel/scripts/lib/media.mjs';
@@ -121,6 +123,82 @@ test('classifyDownloadError maps yt-dlp errors to plain reasons', () => {
   assert.equal(classifyDownloadError('ERROR: [TikTok] 1: Unable to extract universal data', 'tiktok').reason, 'extractor_broken');
   assert.equal(classifyDownloadError('ERROR: HTTP Error 404: Not Found', 'tiktok').reason, 'unavailable');
   assert.equal(classifyDownloadError('something odd', 'tiktok').reason, 'unknown');
+  // A picture post whose pictures didn't arrive is not a broken downloader (don't say "update yt-dlp").
+  const pics = classifyDownloadError(
+    'ERROR: [Instagram] DbD55mhMwDF: No video formats found!; please report this issue on https://github.com/yt-dlp/yt-dlp/issues',
+    'instagram'
+  );
+  assert.equal(pics.reason, 'no_media');
+  assert.match(pics.hint, /screenshots/);
+});
+
+test('isTikTokPhotoPost', () => {
+  assert.ok(isTikTokPhotoPost('https://www.tiktok.com/@someone/photo/7412345678901234567'));
+  assert.ok(!isTikTokPhotoPost('https://www.tiktok.com/@someone/video/7412345678901234567'));
+  assert.ok(!isTikTokPhotoPost('https://www.instagram.com/p/ABC/photo/1'));
+});
+
+// Mirrors what yt-dlp saved in real runs (2026-09-29): a 9-picture Instagram carousel and a reel.
+function fakeDownload(files) {
+  return collectDownloads(Object.keys(files), (f) => files[f]);
+}
+
+test('collectDownloads: carousel of pictures, in slide order, post info from item-0', () => {
+  const picture = { _type: 'video', formats: [] };
+  const files = { 'item-0.info.json': { _type: 'playlist', description: 'caption' } };
+  for (const n of [1, 2, 10]) {
+    files[`item-${n}.info.json`] = picture;
+    files[`item-${n}.jpg`] = null;
+  }
+  const r = fakeDownload(files);
+  assert.equal(r.isPost, true);
+  assert.equal(r.post.description, 'caption');
+  assert.deepEqual(r.items.map((i) => [i.index, i.kind, i.file]), [
+    [1, 'image', 'item-1.jpg'],
+    [2, 'image', 'item-2.jpg'],
+    [10, 'image', 'item-10.jpg'],
+  ]);
+  assert.equal(r.failed, 0);
+});
+
+test('collectDownloads: single reel uses the video, not its cover picture', () => {
+  const r = fakeDownload({
+    'item-0.info.json': { _type: 'video', formats: [{}], description: 'reel caption' },
+    'item-0.mp4': null,
+    'item-0.jpg': null,
+  });
+  assert.equal(r.isPost, false);
+  assert.equal(r.post.description, 'reel caption');
+  assert.deepEqual(r.items.map((i) => [i.kind, i.file]), [['video', 'item-0.mp4']]);
+});
+
+test('collectDownloads: a video that failed is never passed off as its cover', () => {
+  const r = fakeDownload({
+    'item-0.info.json': { _type: 'video', formats: [{}] },
+    'item-0.jpg': null,
+    'item-0.f137.mp4': null, // unmerged piece
+    'item-0.mp4.part': null,
+  });
+  assert.equal(r.items.length, 0);
+  assert.equal(r.failed, 1);
+});
+
+test('collectDownloads: mixed carousel and a single-picture post', () => {
+  const mixed = fakeDownload({
+    'item-0.info.json': { _type: 'playlist' },
+    'item-1.info.json': { formats: [] },
+    'item-1.webp': null,
+    'item-2.info.json': { formats: [{}] },
+    'item-2.mp4': null,
+    'item-2.jpg': null,
+    'item-3.info.json': { formats: [{}] }, // video slide that failed to download
+    'item-3.jpg': null,
+  });
+  assert.deepEqual(mixed.items.map((i) => [i.index, i.kind]), [[1, 'image'], [2, 'video']]);
+  assert.equal(mixed.failed, 1);
+  const single = fakeDownload({ 'item-0.info.json': { _type: 'video', formats: [] }, 'item-0.jpg': null });
+  assert.equal(single.isPost, false);
+  assert.deepEqual(single.items.map((i) => [i.index, i.kind]), [[0, 'image']]);
 });
 
 test('pickFrameTimes: spacing, bounds, and scene-change extras', () => {

@@ -18,10 +18,23 @@ export function detectPlatform(url) {
   return 'web';
 }
 
+// yt-dlp can't download TikTok photo slideshows: /photo/ links are unsupported, and the same
+// post opened as a /video/ link yields only its background music.
+export function isTikTokPhotoPost(url) {
+  return detectPlatform(url) === 'tiktok' && /\/photo\/\d+/.test(url);
+}
+
 // Turns yt-dlp's error output into a reason Claude can explain to a non-technical user.
 export function classifyDownloadError(stderr, platform) {
   const s = stderr.toLowerCase();
   const pick = (reason, message, hint) => ({ reason, message, hint });
+  if (s.includes('no video formats found')) {
+    return pick(
+      'no_media',
+      'This post has no video, and its pictures could not be downloaded.',
+      'Take screenshots of the post (every slide) and share those instead.'
+    );
+  }
   if (s.includes('unsupported url')) {
     return pick('unsupported', 'This link is not a supported video page.', 'Check the link, or screen-record the video instead.');
   }
@@ -60,18 +73,27 @@ export function classifyDownloadError(stderr, platform) {
   return pick('unknown', 'The download failed for an unrecognised reason.', 'Screen-record the video and pass the recording instead.');
 }
 
-export async function downloadVideo({ url, workDir, tools, cookiesFromBrowser }) {
+const IMAGE_FILE = /\.(jpe?g|png|webp|gif|heic|bmp)$/i;
+
+// One yt-dlp call handles both a single video and a multi-slide post (Instagram carousel).
+// Every item is saved as item-<n>.<ext> with item-<n>.info.json beside it: n = 0 for a single
+// video, 1..N for slides (item-0.info.json then describes the whole post). An image slide has
+// no video formats, so yt-dlp saves the picture itself as the "thumbnail" and reports an error
+// for that slide even though the picture arrived. Success is therefore judged by the files.
+export async function downloadPost({ url, workDir, tools, cookiesFromBrowser }) {
   const platform = detectPlatform(url);
   const args = [
     '--no-playlist',
     '--no-progress',
+    '--ignore-no-formats-error',
     '--format', 'bv*+ba/b',
     '--format-sort', 'res:1080',
     '--merge-output-format', 'mp4',
     '--max-filesize', '500M',
     '--write-info-json',
+    '--write-thumbnail',
     '--no-mtime',
-    '--output', join(workDir, 'video.%(ext)s'),
+    '--output', join(workDir, 'item-%(playlist_index|0)s.%(ext)s'),
   ];
   if (tools.ffmpeg) args.push('--ffmpeg-location', tools.ffmpeg);
   // YouTube needs a JavaScript runtime; Node is guaranteed to exist because it's running us.
@@ -81,24 +103,68 @@ export async function downloadVideo({ url, workDir, tools, cookiesFromBrowser })
   args.push('--', url);
 
   const res = await run(tools.ytdlp, args, { timeoutMs: 5 * 60_000, env: { PYTHONIOENCODING: 'utf-8' } });
-  const files = existsSync(workDir) ? readdirSync(workDir) : [];
-  const video = files.find((f) => f.startsWith('video.') && !/\.(info\.json|part|ytdl|temp)$/.test(f) && !f.includes('.part'));
-  if (res.code !== 0 || !video) {
-    const err = res.timedOut
-      ? { reason: 'timeout', message: 'The download took longer than 5 minutes.', hint: 'Try again, or screen-record the video.' }
-      : classifyDownloadError(res.stderr, platform);
-    return { ok: false, platform, ...err, details: lastLines(res.stderr, 6) };
+  if (res.timedOut) {
+    return {
+      ok: false,
+      platform,
+      reason: 'timeout',
+      message: 'The download took longer than 5 minutes.',
+      hint: 'Try again, or screen-record the video.',
+      details: lastLines(res.stderr, 6),
+    };
   }
-  const infoPath = join(workDir, 'video.info.json');
-  let info = {};
-  if (existsSync(infoPath)) {
-    try {
-      info = JSON.parse(readFileSync(infoPath, 'utf8'));
-    } catch {
-      info = {};
-    }
+  const { post, isPost, items, failed } = collectDownloads(existsSync(workDir) ? readdirSync(workDir) : [], (f) =>
+    readJson(join(workDir, f))
+  );
+  if (!items.length) {
+    return { ok: false, platform, ...classifyDownloadError(res.stderr, platform), details: lastLines(res.stderr, 6) };
   }
-  return { ok: true, platform, videoPath: join(workDir, video), info };
+  return {
+    ok: true,
+    platform,
+    info: post,
+    isPost,
+    items: items.map((item) => ({ ...item, path: join(workDir, item.file) })),
+    failed,
+  };
+}
+
+// Sorts what yt-dlp saved into the post's info and its items, in slide order. An item is a
+// video (or audio) when a media file arrived, and an image when it had no formats and its
+// picture arrived. A video that failed to download is never passed off as its cover image.
+export function collectDownloads(files, readInfo) {
+  const byIndex = new Map();
+  for (const f of files) {
+    const m = /^item-(\d+)\.(info\.json|[a-z0-9]+)$/i.exec(f);
+    if (!m) continue; // skips partial downloads and unmerged pieces (item-1.f137.mp4, *.part)
+    const entry = byIndex.get(Number(m[1])) ?? {};
+    if (m[2] === 'info.json') entry.infoFile = f;
+    else if (IMAGE_FILE.test(f)) entry.image = f;
+    else entry.media = f;
+    byIndex.set(Number(m[1]), entry);
+  }
+  const first = byIndex.get(0)?.infoFile ? readInfo(byIndex.get(0).infoFile) : null;
+  const isPost = first?._type === 'playlist';
+  const post = first ?? {};
+  const items = [];
+  let failed = 0;
+  for (const [index, entry] of [...byIndex].sort((a, b) => a[0] - b[0])) {
+    if (isPost && index === 0) continue;
+    const info = entry.infoFile ? readInfo(entry.infoFile) ?? {} : {};
+    const hasFormats = (Array.isArray(info.formats) && info.formats.length > 0) || Boolean(info.url);
+    if (entry.media) items.push({ index, kind: 'video', file: entry.media, info });
+    else if (entry.image && !hasFormats) items.push({ index, kind: 'image', file: entry.image, info });
+    else failed++;
+  }
+  return { post: isPost ? post : items[0]?.info ?? post, isPost, items, failed };
+}
+
+function readJson(path) {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    return null;
+  }
 }
 
 export function metaFromInfo(info, fallbackUrl) {
@@ -227,7 +293,7 @@ export function frameDifference(a, b) {
 // the same text card twice. The threshold is strict on purpose: changed text on an
 // otherwise identical background must still count as a new frame. Measured: two captures
 // of one card differ by 0.00; a one-letter change in 60px text differs by 0.95.
-export async function extractFrames({ ffmpeg, input, times, outDir, width, height, duplicateThreshold = 0.25 }) {
+export async function extractFrames({ ffmpeg, input, times, outDir, width, height, prefix = '', duplicateThreshold = 0.25 }) {
   // Keep the long side at most 1280px: enough to read on-screen text, cheap to look at.
   let scale = 'scale=720:-2';
   if (width && height) {
@@ -237,7 +303,7 @@ export async function extractFrames({ ffmpeg, input, times, outDir, width, heigh
   let duplicates = 0;
   let previous = null;
   for (const [i, t] of times.entries()) {
-    const name = `frame-${String(i + 1).padStart(2, '0')}-at-${formatClock(t).replace(':', 'm')}s.jpg`;
+    const name = `${prefix}frame-${String(i + 1).padStart(2, '0')}-at-${formatClock(t).replace(':', 'm')}s.jpg`;
     const out = join(outDir, name);
     const thumb = join(outDir, `${name}.gray`);
     const res = await run(
@@ -261,6 +327,22 @@ export async function extractFrames({ ffmpeg, input, times, outDir, width, heigh
     frames.push({ path: out, atSec: t, at: formatClock(t) });
   }
   return { frames, duplicates };
+}
+
+// Image slides get the same treatment as video frames: JPEG, long side at most 1280px.
+export async function saveImage({ ffmpeg, input, output }) {
+  const res = await run(
+    ffmpeg,
+    [
+      '-hide_banner', '-loglevel', 'error', '-y', '-i', input, '-frames:v', '1',
+      '-vf', "scale='min(1280,iw)':'min(1280,ih)':force_original_aspect_ratio=decrease", '-q:v', '3', output,
+    ],
+    { timeoutMs: 60_000 }
+  );
+  if (res.code !== 0 || !existsSync(output) || statSync(output).size === 0) {
+    return { ok: false, error: lastLines(res.stderr, 3) || 'ffmpeg could not read the image' };
+  }
+  return { ok: true, path: output };
 }
 
 export function formatClock(sec) {

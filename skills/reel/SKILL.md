@@ -1,7 +1,7 @@
 ---
 name: reel
-description: Check whether advice from a short video (TikTok, Instagram Reel, YouTube Short, X) is true and whether it applies to this codebase. Transcribes the video, reads its on-screen text, judges each claim, inspects the project, and reports verdicts with proposed changes for the user to approve.
-when_to_use: Use when the user shares a reel, TikTok, or short-video link (or a screen recording of one) and asks whether their app needs what it says, e.g. "does this apply to me?", "do I need this?", "this guy says my vibe-coded app needs RLS", or pastes a bare tiktok.com / instagram.com/reel / youtube.com/shorts link in a coding session.
+description: Check whether advice from a short video or carousel post (TikTok, Instagram Reel or carousel, YouTube Short, X) is true and whether it applies to this codebase. Transcribes the video, reads its on-screen text or slides, judges each claim, inspects the project, and reports verdicts with proposed changes for the user to approve.
+when_to_use: Use when the user shares a reel, TikTok, carousel post, or short-video link (or a screen recording or screenshots of one) and asks whether their app needs what it says, e.g. "does this apply to me?", "do I need this?", "this guy says my vibe-coded app needs RLS", or pastes a bare tiktok.com / instagram.com/reel / instagram.com/p / youtube.com/shorts link in a coding session.
 argument-hint: <reel URL or path to a screen recording>
 allowed-tools:
   - Bash(node "${CLAUDE_SKILL_DIR}/scripts/fetch-reel.mjs" *)
@@ -45,16 +45,19 @@ node "${CLAUDE_SKILL_DIR}/scripts/fetch-reel.mjs" '<link or path to video file>'
 It prints one JSON object. Handle it like this:
 
 - **`"ok": true`**: Read **every** image in `frames` (the on-screen text is often the real point of
-  the video), plus `transcript.timestamped` and `meta.caption`. If `transcriptNote` is set, tell the
-  user in one sentence why there's no transcript and carry on with frames and caption. If the spoken
-  part is clearly essential and missing, say so and offer the fixes it mentions.
+  the video), plus `transcript.timestamped` and `meta.caption`. If `meta.post` is set, it's a
+  multi-slide post: `frames` are its slides in order (each has a `slide` number; a video slide
+  contributes several frames). If `transcriptNote` is set, tell the user in one sentence why there's
+  no transcript (skip this for a pictures-only post) and carry on with frames and caption. If the
+  spoken part is clearly essential and missing, say so and offer the fixes it mentions.
 - **`"stage": "setup"`**: tools are missing. Run `node "${CLAUDE_SKILL_DIR}/scripts/doctor.mjs"` and
   relay its "To fix" steps in plain words. Offer to run the install commands for them; run them only
   after they say yes. Then retry.
 - **`"stage": "download"`**: explain `message` in one plain sentence, then offer the `fallbacks`, the
   simplest first: screen-record the reel and give the file path (then rerun the script with that path),
-  or paste the caption and describe what's said. If `reason` is `extractor_broken`, suggest updating
-  yt-dlp (the doctor prints the command). Browser cookies are opt-in: explain that it lets the
+  or paste the caption and describe what's said. If `reason` is `no_media` or `photo_post`, it's a
+  picture post that can't be downloaded: ask for screenshots of every slide instead. If `reason` is
+  `extractor_broken`, suggest updating yt-dlp (the doctor prints the command). Browser cookies are opt-in: explain that it lets the
   downloader use their logged-in browser session, and only suggest it, never turn it on yourself.
 - **`"stage": "input"`, `"probe"` or `"internal"`**: explain the `message` and ask for a working link or
   file.
@@ -66,7 +69,7 @@ false about software. For each one, note:
 
 - the claim in neutral words (e.g. "Supabase tables without Row Level Security can be read by anyone"),
 - what technology it's about, and what the creator says will happen,
-- where it appears (timestamp or frame), especially if it was shown on screen but not said.
+- where it appears (timestamp, frame, or slide), especially if it was shown on screen but not said.
 
 Merge duplicates. Separate substance from packaging: urgency ("your app WILL get hacked"), selling
 ("link in bio for my template"), and engagement bait aren't claims, but note them if they distort the

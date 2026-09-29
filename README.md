@@ -9,7 +9,8 @@ aren't a security expert, you can't tell which, and you don't have time to resea
 reels2Claude is a [Claude Code](https://code.claude.com) plugin. Give it the link, and Claude:
 
 1. **Watches the reel.** It downloads it, transcribes the speech, and reads the on-screen text and
-   caption (a lot of reels put the real point on screen, not in the voiceover).
+   caption (a lot of reels put the real point on screen, not in the voiceover). Instagram carousel
+   posts work too: it reads every slide.
 2. **Judges the advice itself.** Is the claim true, outdated, misleading, or wrong?
 3. **Checks your codebase.** Does your project already handle it? Does it even apply to your stack?
 4. **Reports back and waits.** You get a verdict per claim plus proposed changes. **Nothing in your
@@ -98,7 +99,8 @@ In your project, in Claude Code:
 /reels2claude:reel https://www.instagram.com/reel/ABC123/
 ```
 
-Or just paste the link and ask *"does this apply to my app?"*
+Carousel posts (`instagram.com/p/...`) work the same way. Or just paste the link and ask
+*"does this apply to my app?"*
 
 **Instagram blocked the download?** It often does. Screen-record the reel on your phone, move the
 file to your computer, and give Claude the path:
@@ -132,6 +134,7 @@ your project, so you keep a history of what you've already checked.
 | "Missing required tool" | Run the doctor and follow its commands. |
 | Downloads fail with "unable to extract" | Sites change often; update yt-dlp (the doctor prints the command). |
 | Instagram "login required" | Screen-record the reel instead, or opt in to browser cookies. |
+| TikTok photo slideshow, or a picture post that won't download | Take screenshots of every slide and give them to Claude. |
 | "No transcript" | Add a key to `~/.reels2claude/.env`, then run `/reels2claude:doctor --check-keys` to test it. |
 | Key rejected | Re-copy the key: no quotes, no spaces around it. |
 
@@ -141,7 +144,7 @@ your project, so you keep a history of what you've already checked.
 link or video file
       │
       ▼
-fetch-reel.mjs ── yt-dlp ──► video + caption
+fetch-reel.mjs ── yt-dlp ──► video (or every carousel slide) + caption
       │           ffmpeg ──► frames: evenly spaced + right after scene cuts, duplicates skipped
       │           ffmpeg ──► audio ──► Groq / OpenAI / Gemini / whisper.cpp ──► transcript
       ▼
@@ -174,12 +177,13 @@ For development, a `.env` in the repo root is read before `~/.reels2claude/.env`
 
 **Test status (v0.1.0):**
 
-- Tested end to end: local video files, direct video links, frame extraction (scene cuts +
-  duplicate skipping), the doctor, and plugin validation.
+- Tested end to end: local video files, direct video links, real Instagram reels and carousel
+  posts (no login needed in our tests), frame extraction (scene cuts + duplicate skipping), the
+  doctor, and plugin validation.
 - Tested against the live APIs **up to authentication** (the request reaches the service; a bad
   key gets a clear, key-free error): Groq, OpenAI, Gemini.
-- **Not yet tested:** a successful transcription with a real key, downloads of real TikTok and
-  Instagram reels, and whisper.cpp. All are implemented from official docs.
+- **Not yet tested:** a successful transcription with a real key, downloads of real TikTok
+  videos, and whisper.cpp. All are implemented from official docs.
 
 ## License
 
