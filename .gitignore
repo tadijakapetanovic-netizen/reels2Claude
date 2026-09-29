@@ -1,0 +1,28 @@
+# Private notes (never public)
+docs/*
+
+# Secrets: API keys live here. Never commit.
+.env
+.env.*
+!.env.example
+
+# Local test output (transcripts/frames of third-party reels)
+reel-reports/
+
+# Local whisper.cpp models (150 MB-1.5 GB; GitHub rejects files over 100 MB)
+ggml-*.bin
+
+# Dependencies
+node_modules/
+
+# Personal Claude Code / editor settings
+.claude/settings.local.json
+.vscode/
+.idea/
+
+# OS and log clutter
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+# Temporary files

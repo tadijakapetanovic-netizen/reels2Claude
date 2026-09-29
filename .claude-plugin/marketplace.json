@@ -1,0 +1,15 @@
+{
+  "name": "reels2claude",
+  "description": "reels2Claude: check whether TikTok/Instagram reel advice applies to your codebase.",
+  "owner": {
+    "name": "Tadija Kapetanovic",
+    "url": "https://github.com/tadijakapetanovic-netizen"
+  },
+  "plugins": [
+    {
+      "name": "reels2claude",
+      "source": "./",
+      "description": "Check whether advice from a TikTok/Instagram reel is true and whether it applies to your codebase."
+    }
+  ]
+}
