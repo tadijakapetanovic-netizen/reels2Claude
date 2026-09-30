@@ -72,7 +72,9 @@ export const PROVIDERS = {
   gemini: { label: 'Google Gemini', keyVar: 'GEMINI_API_KEY', defaultModel: 'gemini-3.5-transcribe', audio: 'mp3' },
   local: { label: 'whisper.cpp (local)', keyVar: null, defaultModel: null, audio: 'wav' },
 };
-export const PROVIDER_ORDER = ['groq', 'openai', 'gemini', 'local'];
+// Local first: free and private. An API is used when the user picks one with
+// REELS2CLAUDE_PROVIDER, or when whisper.cpp isn't installed but a key is set.
+export const PROVIDER_ORDER = ['local', 'groq', 'openai', 'gemini'];
 
 // `localCheck` reports whether whisper.cpp is usable; it's passed in so this
 // module stays free of lookups for binaries.
@@ -102,5 +104,5 @@ export function selectProvider(values, localCheck, override) {
     const status = providerStatus(name, values, localCheck);
     if (status.ready) return { name, ...status };
   }
-  return { name: null, reason: 'No transcription provider is configured (no API key and no local whisper.cpp).' };
+  return { name: null, reason: 'No transcription is set up (whisper.cpp is not installed and no API key is set).' };
 }

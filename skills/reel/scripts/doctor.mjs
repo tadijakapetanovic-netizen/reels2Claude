@@ -6,8 +6,9 @@
 //   --check-keys  makes one free, read-only request per configured key to confirm it's accepted
 import { loadConfig, PROVIDER_ORDER, PROVIDERS, selectProvider, USER_CONFIG_DIR } from './lib/config.mjs';
 import { redact } from './lib/transcribe.mjs';
-import { checkLocalWhisper, IS_WIN, resolveTools, toolVersion } from './lib/tools.mjs';
-import { join } from 'node:path';
+import { checkLocalWhisper, IS_WIN, resolveTools, toolVersion, WHISPER_MODELS_DIR } from './lib/tools.mjs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const args = new Set(process.argv.slice(2));
 const OS = IS_WIN ? 'windows' : process.platform === 'darwin' ? 'mac' : 'linux';
@@ -40,12 +41,14 @@ const INSTALL = {
   whisper: {
     windows: [
       'Download whisper-bin-x64.zip from https://github.com/ggml-org/whisper.cpp/releases',
+      '  (from the newest release that lists files; some version-number releases have none)',
       '  and unzip it to %LOCALAPPDATA%\\Programs\\whisper.cpp',
     ],
     mac: ['brew install whisper-cpp'],
     linux: [
-      'git clone https://github.com/ggml-org/whisper.cpp && cd whisper.cpp',
-      'cmake -B build && cmake --build build -j --config Release   # binary: build/bin/whisper-cli',
+      'git clone --depth 1 https://github.com/ggml-org/whisper.cpp ~/.local/src/whisper.cpp && cd ~/.local/src/whisper.cpp',
+      'cmake -B build -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release && cmake --build build -j --target whisper-cli',
+      'mkdir -p ~/.local/bin && cp build/bin/whisper-cli ~/.local/bin/',
     ],
   },
 };
@@ -146,13 +149,15 @@ async function main() {
     report.fixes.push({
       what: 'Set up transcription (optional, but without it only on-screen text and the caption are used)',
       commands: [
-        'Easiest and free: create a Groq key at https://console.groq.com/keys',
-        `then put this line in ${join(USER_CONFIG_DIR, '.env')} (create the file if needed):`,
-        '  GROQ_API_KEY=your-key-here',
-        'Alternatives: OPENAI_API_KEY or GEMINI_API_KEY in the same file, or local whisper.cpp:',
+        'Recommended: whisper.cpp, free and private (runs on this computer, nothing is uploaded).',
+        'One command installs it and a model (about 500 MB download):',
+        `  node "${join(dirname(fileURLToPath(import.meta.url)), 'install-whisper.mjs')}"`,
+        'Or by hand:',
         ...INSTALL.whisper[OS].map((l) => `  ${l}`),
-        '  then download a model, e.g. https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin',
-        '  and set WHISPER_CPP_MODEL=<path to that file> (and WHISPER_CPP_BIN if whisper-cli is not found).',
+        '  then download a model, e.g. https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin',
+        `  (about 490 MB) and put it in ${WHISPER_MODELS_DIR} (it's found automatically there).`,
+        '  Set WHISPER_CPP_BIN only if whisper-cli is installed somewhere unusual.',
+        `Or use a paid/online service: put GROQ_API_KEY, OPENAI_API_KEY or GEMINI_API_KEY in ${join(USER_CONFIG_DIR, '.env')}.`,
       ],
     });
   }

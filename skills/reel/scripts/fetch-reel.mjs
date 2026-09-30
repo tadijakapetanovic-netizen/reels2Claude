@@ -5,11 +5,11 @@
 // each video slide is handled like a reel.
 // Prints exactly one JSON object to stdout. Exit code 0 = usable result, 1 = failed.
 //
-// Usage: node fetch-reel.mjs <url-or-video-file> [--out DIR] [--provider groq|openai|gemini|local|none]
+// Usage: node fetch-reel.mjs <url-or-video-file> [--out DIR] [--provider local|groq|openai|gemini|none]
 //                            [--cookies-from-browser BROWSER] [--keep-media]
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, extname, join, resolve } from 'node:path';
-import { loadConfig, PROVIDERS, selectProvider } from './lib/config.mjs';
+import { loadConfig, PROVIDERS, selectProvider, USER_CONFIG_DIR } from './lib/config.mjs';
 import {
   detectPlatform,
   detectSceneChanges,
@@ -102,40 +102,63 @@ async function processVideo({ videoPath, workDir, tools, config, choice, prefix,
   // Transcript of the speech
   if (!info.hasAudio) {
     out.note = 'The video has no audio track; rely on the frames and caption.';
-  } else if (!choice.name) {
-    out.note = `No transcript: ${choice.reason} Run the doctor script for setup steps. Frames and caption are still available.`;
   } else if (choice.name === 'none') {
     out.note = choice.reason;
   } else {
-    const format = PROVIDERS[choice.name].audio;
-    const audio = await extractAudio({ ffmpeg: tools.ffmpeg, input: videoPath, output: join(workDir, `audio${prefix ? `-${prefix.slice(0, -1)}` : ''}.${format}`), format });
-    if (!audio.ok) {
-      out.note = `No transcript: the audio could not be extracted (${audio.error}).`;
-    } else {
-      try {
-        const result = await transcribe({
-          provider: choice.name,
-          model: choice.model,
-          values: config.values,
-          audioPath: audio.path,
-          workDir,
-          localBin: choice.bin,
-        });
-        out.transcript = {
-          provider: choice.name,
-          providerLabel: providerLabel(choice.name),
-          model: choice.name === 'local' ? basename(choice.model) : choice.model,
-          language: result.language,
-          text: result.text,
-          timestamped: timestamped(result.segments, result.text),
-        };
-        if (!result.text) out.note = 'The transcript is empty: the audio is probably just music.';
-      } catch (error) {
-        out.note = `No transcript: ${error.message}${error.hint ? ` ${error.hint}` : ''}`;
+    const attempt = await transcribeWith(choice, { videoPath, workDir, config, tools, prefix, durationSec: info.durationSec });
+    let result = attempt.result;
+    let used = choice;
+    let note = attempt.error;
+    // An API that fails (bad key, quota, outage) falls back to whisper.cpp when it's installed.
+    if (!result && attempt.apiFailed) {
+      const local = checkLocalWhisper(config.values);
+      if (local.ok) {
+        used = { name: 'local', model: local.model, bin: local.bin };
+        const retry = await transcribeWith(used, { videoPath, workDir, config, tools, prefix, durationSec: info.durationSec });
+        result = retry.result;
+        note = result
+          ? `${providerLabel(choice.name)} failed (${attempt.error}), so the local whisper.cpp was used instead.`
+          : `${attempt.error} The local whisper.cpp fallback also failed: ${retry.error}`;
       }
+    }
+    if (result) {
+      out.transcript = {
+        provider: used.name,
+        providerLabel: providerLabel(used.name),
+        model: used.name === 'local' ? basename(used.model) : used.model,
+        language: result.language,
+        text: result.text,
+        timestamped: timestamped(result.segments, result.text),
+      };
+      out.note = result.text ? (note ?? null) : 'The transcript is empty: the audio is probably just music.';
+    } else {
+      out.note = `No transcript: ${note}`;
     }
   }
   return out;
+}
+
+// Returns { result } or { error, apiFailed } (apiFailed: the provider itself failed, not the audio).
+async function transcribeWith(choice, { videoPath, workDir, config, tools, prefix, durationSec }) {
+  const format = PROVIDERS[choice.name].audio;
+  const output = join(workDir, `audio${prefix ? `-${prefix.slice(0, -1)}` : ''}.${format}`);
+  const audio = await extractAudio({ ffmpeg: tools.ffmpeg, input: videoPath, output, format });
+  if (!audio.ok) return { error: `the audio could not be extracted (${audio.error}).` };
+  try {
+    const result = await transcribe({
+      provider: choice.name,
+      model: choice.model,
+      values: config.values,
+      audioPath: audio.path,
+      workDir,
+      localBin: choice.bin,
+      durationSec,
+    });
+    return { result };
+  } catch (error) {
+    const message = /[.!?]$/.test(error.message) ? error.message : `${error.message}.`;
+    return { error: `${message}${error.hint ? ` ${error.hint}` : ''}`, apiFailed: choice.name !== 'local' };
+  }
 }
 
 // One transcript per video slide becomes one transcript, labelled by slide.
@@ -152,7 +175,7 @@ function mergeTranscripts(parts) {
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (opts.help || !opts.input) {
-    return fail('input', 'Usage: node fetch-reel.mjs <reel URL or path to a video file> [--provider groq|openai|gemini|local|none]');
+    return fail('input', 'Usage: node fetch-reel.mjs <reel URL or path to a video file> [--provider local|groq|openai|gemini|none]');
   }
 
   const config = loadConfig();
@@ -187,6 +210,19 @@ async function main() {
     return fail('setup', `Missing required tool(s): ${missing.join(', ')}.`, {
       missing,
       hint: 'Run the doctor script to get the exact install commands for this computer.',
+    });
+  }
+
+  // No transcription set up: stop before downloading anything, so the user can choose first.
+  const choice = selectProvider(config.values, checkLocalWhisper, opts.provider);
+  if (!choice.name) {
+    return fail('transcription', `Speech can't be transcribed yet: ${choice.reason}`, {
+      reason: 'not_set_up',
+      choices: [
+        { id: 'install_whisper', label: 'Install whisper.cpp: free, private, runs on this computer (about 500 MB download)', run: 'install-whisper.mjs' },
+        { id: 'api_key', label: 'Use an API key the user already has (Groq, OpenAI or Google Gemini)', keyFile: join(USER_CONFIG_DIR, '.env') },
+        { id: 'skip', label: 'Skip transcription this time: use on-screen text and caption only', rerunWith: '--no-transcribe' },
+      ],
     });
   }
 
@@ -236,7 +272,6 @@ async function main() {
   }
 
   // 2. Frames (or pictures) and transcripts
-  const choice = selectProvider(config.values, checkLocalWhisper, opts.provider);
   const frames = [];
   const transcripts = [];
   const notes = [];

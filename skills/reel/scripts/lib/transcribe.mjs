@@ -2,6 +2,7 @@
 // API keys are only ever sent to their own provider and never printed.
 import { existsSync, readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import os from 'node:os';
 import { join } from 'node:path';
 import { PROVIDERS } from './config.mjs';
 import { run } from './tools.mjs';
@@ -13,7 +14,7 @@ export class TranscriptionError extends Error {
   }
 }
 
-export async function transcribe({ provider, model, values, audioPath, workDir, localBin }) {
+export async function transcribe({ provider, model, values, audioPath, workDir, localBin, durationSec }) {
   switch (provider) {
     case 'groq':
       return openAiCompatible({
@@ -37,7 +38,7 @@ export async function transcribe({ provider, model, values, audioPath, workDir, 
     case 'gemini':
       return gemini({ key: values.GEMINI_API_KEY, model, audioPath });
     case 'local':
-      return whisperCpp({ bin: localBin, model, audioPath, workDir });
+      return whisperCpp({ bin: localBin, model, audioPath, workDir, durationSec });
     default:
       throw new TranscriptionError(`Unknown provider "${provider}".`);
   }
@@ -89,15 +90,27 @@ async function gemini({ key, model, audioPath }) {
   return { text: stripTimestamps(text), language: null, segments: parseTimestampedLines(text) };
 }
 
-async function whisperCpp({ bin, model, audioPath, workDir }) {
+// On a 2012 CPU the small model needs about 4 s per second of audio; newer CPUs are much faster.
+// availableParallelism() arrived in Node 18.14.
+const cpuThreads = () => os.availableParallelism?.() ?? (os.cpus().length || 4);
+
+export function whisperTimeoutMs(durationSec) {
+  return Math.max(15 * 60_000, Math.ceil((durationSec || 0) * 20) * 1000);
+}
+
+async function whisperCpp({ bin, model, audioPath, workDir, durationSec }) {
   const outBase = join(workDir, 'whisper');
-  const res = await run(bin, ['-m', model, '-f', audioPath, '-l', 'auto', '-oj', '-otxt', '-of', outBase, '-np'], {
-    timeoutMs: 15 * 60_000,
-  });
+  const timeoutMs = whisperTimeoutMs(durationSec);
+  // All CPU threads (whisper.cpp uses 4 by default) and greedy decoding: in our tests about twice as
+  // fast as the defaults, with the same transcript.
+  const args = ['-m', model, '-f', audioPath, '-l', 'auto', '-t', String(cpuThreads()), '-bs', '1', '-bo', '1'];
+  const res = await run(bin, [...args, '-oj', '-otxt', '-of', outBase, '-np'], { timeoutMs });
   if (res.code !== 0) {
     throw new TranscriptionError(
       `whisper.cpp failed: ${(res.stderr || res.stdout).trim().split(/\r?\n/).slice(-2).join(' ')}`,
-      res.timedOut ? 'It ran for 15 minutes; try a smaller model such as ggml-base.bin.' : 'Run the doctor to check the whisper.cpp setup.'
+      res.timedOut
+        ? `It ran for ${Math.round(timeoutMs / 60_000)} minutes; try a smaller model such as ggml-base.bin.`
+        : 'Run the doctor to check the whisper.cpp setup.'
     );
   }
   if (existsSync(`${outBase}.json`)) {

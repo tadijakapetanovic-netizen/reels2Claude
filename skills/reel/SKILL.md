@@ -7,6 +7,8 @@ allowed-tools:
   - Bash(node "${CLAUDE_SKILL_DIR}/scripts/fetch-reel.mjs" *)
   - Bash(node "${CLAUDE_SKILL_DIR}/scripts/doctor.mjs")
   - Bash(node "${CLAUDE_SKILL_DIR}/scripts/doctor.mjs" *)
+  - Bash(node "${CLAUDE_SKILL_DIR}/scripts/install-whisper.mjs")
+  - Bash(node "${CLAUDE_SKILL_DIR}/scripts/install-whisper.mjs" *)
   - Read
   - Grep
   - Glob
@@ -48,11 +50,27 @@ It prints one JSON object. Handle it like this:
   the video), plus `transcript.timestamped` and `meta.caption`. If `meta.post` is set, it's a
   multi-slide post: `frames` are its slides in order (each has a `slide` number; a video slide
   contributes several frames). If `transcriptNote` is set, tell the user in one sentence why there's
-  no transcript (skip this for a pictures-only post) and carry on with frames and caption. If the
+  no transcript, or which fallback produced it (skip this for a pictures-only post) and carry on with frames and caption. If the
   spoken part is clearly essential and missing, say so and offer the fixes it mentions.
 - **`"stage": "setup"`**: tools are missing. Run `node "${CLAUDE_SKILL_DIR}/scripts/doctor.mjs"` and
   relay its "To fix" steps in plain words. Offer to run the install commands for them; run them only
   after they say yes. Then retry.
+- **`"stage": "transcription"`**: speech-to-text isn't set up yet, and nothing was downloaded. Ask the
+  user which of the three `choices` they want, in plain words, and wait. Don't pick for them.
+  1. **Install whisper.cpp:** free and private (the audio never leaves their computer), a one-time
+     download of about 500 MB; on older computers a one-minute reel can take a few minutes to
+     transcribe. After they say yes, run `node "${CLAUDE_SKILL_DIR}/scripts/install-whisper.mjs"` (it
+     takes a few minutes; say so). If `ok` is false, explain `message` and any failed step's
+     `commands`, offer to run those commands, run them only after a yes, then run the installer again.
+  2. **Use an API key they already have:** ask which service (Groq, OpenAI or Google Gemini). Never
+     ask them to paste the key into the chat. Tell them to add one line, `GROQ_API_KEY=...`,
+     `OPENAI_API_KEY=...` or `GEMINI_API_KEY=...`, to the file in `keyFile` (you may create it with
+     that line and an empty value for them to fill in). When they say it's done, run the doctor with
+     `--check-keys` to confirm the key works.
+  3. **Skip this time:** use on-screen text and caption only. Add `--no-transcribe` when you rerun.
+     They'll be asked again next time.
+
+  Then rerun the fetch-reel command.
 - **`"stage": "download"`**: explain `message` in one plain sentence, then offer the `fallbacks`, the
   simplest first: screen-record the reel and give the file path (then rerun the script with that path),
   or paste the caption and describe what's said. If `reason` is `no_media` or `photo_post`, it's a

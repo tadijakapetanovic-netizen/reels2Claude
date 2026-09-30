@@ -1,6 +1,6 @@
 // Unit tests for the pure parts of the pipeline. Run: node --test tests/
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -15,7 +15,9 @@ import {
   metaFromInfo,
   pickFrameTimes,
 } from '../skills/reel/scripts/lib/media.mjs';
-import { parseTimestampedLines, redact } from '../skills/reel/scripts/lib/transcribe.mjs';
+import { pickModel, pickRelease, windowsAssetName } from '../skills/reel/scripts/lib/install.mjs';
+import { findWhisperModel } from '../skills/reel/scripts/lib/tools.mjs';
+import { parseTimestampedLines, redact, whisperTimeoutMs } from '../skills/reel/scripts/lib/transcribe.mjs';
 
 const noLocal = () => ({ ok: false, problem: 'whisper.cpp (whisper-cli) is not installed' });
 const withLocal = () => ({ ok: true, bin: '/bin/whisper-cli', model: '/models/ggml-base.bin' });
@@ -75,16 +77,18 @@ test('loadConfig: first file wins, environment beats files, empty values are ign
   }
 });
 
-test('selectProvider: auto order is groq, openai, gemini, local', () => {
+test('selectProvider: whisper.cpp first, then groq, openai, gemini', () => {
+  assert.equal(selectProvider({}, withLocal).name, 'local');
+  assert.equal(selectProvider({ GROQ_API_KEY: 'y', OPENAI_API_KEY: 'x' }, withLocal).name, 'local');
   assert.equal(selectProvider({ OPENAI_API_KEY: 'x', GROQ_API_KEY: 'y' }, noLocal).name, 'groq');
   assert.equal(selectProvider({ OPENAI_API_KEY: 'x', GEMINI_API_KEY: 'z' }, noLocal).name, 'openai');
   assert.equal(selectProvider({ GEMINI_API_KEY: 'z' }, noLocal).name, 'gemini');
-  assert.equal(selectProvider({}, withLocal).name, 'local');
   assert.equal(selectProvider({}, noLocal).name, null);
 });
 
 test('selectProvider: explicit choice, "none", unknown and unready providers', () => {
-  assert.equal(selectProvider({ GROQ_API_KEY: 'y', REELS2CLAUDE_PROVIDER: 'local' }, withLocal).name, 'local');
+  assert.equal(selectProvider({ GROQ_API_KEY: 'y', REELS2CLAUDE_PROVIDER: 'groq' }, withLocal).name, 'groq');
+  assert.equal(selectProvider({ GROQ_API_KEY: 'y' }, withLocal, 'groq').name, 'groq');
   assert.equal(selectProvider({ GROQ_API_KEY: 'y' }, noLocal, 'none').name, 'none');
   const unknown = selectProvider({}, noLocal, 'whisperx');
   assert.equal(unknown.name, null);
@@ -277,4 +281,60 @@ test('parseTimestampedLines reads [m:ss] and [h:mm:ss] lines', () => {
 test('redact removes every occurrence of the key', () => {
   assert.equal(redact('bad key gsk_123 (gsk_123)', 'gsk_123'), 'bad key [redacted] ([redacted])');
   assert.equal(redact('nothing', undefined), 'nothing');
+});
+
+test('findWhisperModel picks the biggest ggml-*.bin and ignores everything else', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'r2c-test-'));
+  try {
+    assert.equal(findWhisperModel(join(dir, 'missing')), null);
+    assert.equal(findWhisperModel(dir), null);
+    writeFileSync(join(dir, 'ggml-base.bin'), Buffer.alloc(10));
+    writeFileSync(join(dir, 'ggml-small.bin'), Buffer.alloc(30));
+    writeFileSync(join(dir, 'ggml-large.bin.part'), Buffer.alloc(99));
+    writeFileSync(join(dir, 'notes.bin'), Buffer.alloc(99));
+    mkdirSync(join(dir, 'ggml-folder.bin'));
+    assert.equal(findWhisperModel(dir), join(dir, 'ggml-small.bin'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('whisperTimeoutMs: at least 15 minutes, 20 s per second of audio for long videos', () => {
+  assert.equal(whisperTimeoutMs(null), 15 * 60_000);
+  assert.equal(whisperTimeoutMs(30), 15 * 60_000);
+  assert.equal(whisperTimeoutMs(180), 60 * 60_000);
+});
+
+// Shape of GitHub's release list for ggml-org/whisper.cpp in Sept 2026: the newest version
+// tag has no files, the build releases next to it do.
+const asset = (name, digest) => ({ name, size: 1, digest, browser_download_url: `https://example/${name}` });
+const RELEASES = [
+  { tag_name: 'v1.9.4', draft: false, prerelease: false, assets: [] },
+  { tag_name: 'b5130', draft: false, prerelease: true, assets: [asset('whisper-bin-x64.zip', 'sha256:' + 'a'.repeat(64)), asset('whisper-bin-win-cpu-arm64.zip')] },
+  { tag_name: 'b4938', draft: false, prerelease: false, assets: [asset('whisper-bin-x64.zip', 'sha256:' + 'B'.repeat(64))] },
+];
+
+test('pickRelease: newest full release that has the file, pre-release only as a fallback', () => {
+  const x64 = pickRelease(RELEASES, 'whisper-bin-x64.zip');
+  assert.equal(x64.tag, 'b4938');
+  assert.equal(x64.sha256, 'b'.repeat(64));
+  const arm = pickRelease(RELEASES, 'whisper-bin-win-cpu-arm64.zip');
+  assert.equal(arm.tag, 'b5130');
+  assert.equal(arm.sha256, null);
+  assert.equal(pickRelease(RELEASES, 'nope.zip'), null);
+  assert.equal(windowsAssetName('x64'), 'whisper-bin-x64.zip');
+  assert.equal(windowsAssetName('arm64'), 'whisper-bin-win-cpu-arm64.zip');
+});
+
+test('pickModel: exact file name, Hugging Face checksum and size', () => {
+  const files = [
+    { path: 'ggml-small.en.bin', size: 1, lfs: { oid: 'x', size: 2 } },
+    { path: 'ggml-small.bin', size: 135, lfs: { oid: 'c'.repeat(64), size: 487601967 } },
+  ];
+  const m = pickModel(files, 'small');
+  assert.equal(m.file, 'ggml-small.bin');
+  assert.equal(m.sha256, 'c'.repeat(64));
+  assert.equal(m.size, 487601967);
+  assert.ok(m.url.endsWith('/resolve/main/ggml-small.bin'));
+  assert.equal(pickModel(files, 'huge'), null);
 });

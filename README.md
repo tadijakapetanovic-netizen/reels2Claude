@@ -69,27 +69,31 @@ PATH editing needed.
 
 ### Transcription (turning speech into text)
 
-Claude can't listen to audio, so a speech-to-text service does that step. Pick one:
+Claude can't listen to audio, so a speech-to-text step does that. **You don't need to set this up
+in advance:** the first time you check a reel (or run the doctor), Claude asks which you prefer,
+before anything is downloaded:
 
-| Option | Cost | Setup |
-|---|---|---|
-| **Groq** (recommended) | Free tier, no credit card | Get a key at [console.groq.com/keys](https://console.groq.com/keys) |
-| OpenAI | ~$0.006 per minute | Key from [platform.openai.com](https://platform.openai.com/api-keys) |
-| Google Gemini | Free tier available | Key from [aistudio.google.com](https://aistudio.google.com/apikey) |
-| whisper.cpp | Free, runs on your computer, private | The doctor shows how to install it |
+1. **Install whisper.cpp** (the default): **free, private, and it runs on your own computer**, so
+   no extra subscription and nothing is uploaded. Say yes and Claude installs
+   [whisper.cpp](https://github.com/ggml-org/whisper.cpp) plus a speech model (about 500 MB,
+   checksum-verified) into `~/.reels2claude/models/`.
+2. **Use an API key you already have** (Groq, OpenAI or Google Gemini). Claude tells you which file
+   to put it in; never paste a key into the chat.
+3. **Skip it for now.** Claude uses the on-screen text and caption only, and asks again next time.
 
-Put the key in a file called `.env` in a `.reels2claude` folder in your home directory
-(`~/.reels2claude/.env`, on Windows `C:\Users\<you>\.reels2claude\.env`):
+Already have whisper.cpp? It's detected and nothing is reinstalled. Any `ggml-*.bin` model in
+`~/.reels2claude/models/` (on Windows `C:\Users\<you>\.reels2claude\models\`) is found
+automatically.
 
-```
-GROQ_API_KEY=gsk_your_key_here
-```
+Speed depends on your computer: a modern laptop is quick, while a 2012 desktop CPU needs about
+4 seconds per second of audio.
 
-See [`.env.example`](.env.example) for every option. An Anthropic API key **won't** work here: no
-Claude model accepts audio. That's fine, because the judging is done by the Claude you're already
-talking to.
-
-Transcription is optional. Without it, Claude still reads the on-screen text and the caption.
+**Switching to an online service later:** put the key in
+`~/.reels2claude/.env` (e.g. `GROQ_API_KEY=...`) and, if whisper.cpp is also installed, add
+`REELS2CLAUDE_PROVIDER=groq` (or `openai` / `gemini`) to choose it. If the online service fails
+(bad key, quota, outage), whisper.cpp is used instead when it's installed. See
+[`.env.example`](.env.example) for every option. An Anthropic API key **won't** work here: no Claude
+model accepts audio. That's fine, because the judging is done by the Claude you're already talking to.
 
 ## Use
 
@@ -120,7 +124,8 @@ your project, so you keep a history of what you've already checked.
 - **You approve every change.** Claude only reads your code while checking. It edits nothing until
   you choose which proposed changes to implement.
 - **What leaves your computer:** the video is downloaded from the platform, and its *audio* is sent
-  to the transcription service you chose (none, if you use whisper.cpp). Your code isn't sent
+  to an online transcription service only if you chose one (with the default whisper.cpp, it
+  never leaves your computer). Your code isn't sent
   anywhere beyond your normal Claude Code session.
 - **API keys are never printed** by the scripts, and are sent only to their own provider.
 - Instagram can require a login to download. Using your browser's login is **off by default**; you
@@ -135,8 +140,9 @@ your project, so you keep a history of what you've already checked.
 | Downloads fail with "unable to extract" | Sites change often; update yt-dlp (the doctor prints the command). |
 | Instagram "login required" | Screen-record the reel instead, or opt in to browser cookies. |
 | TikTok photo slideshow, or a picture post that won't download | Take screenshots of every slide and give them to Claude. |
-| "No transcript" | Add a key to `~/.reels2claude/.env`, then run `/reels2claude:doctor --check-keys` to test it. |
-| Key rejected | Re-copy the key: no quotes, no spaces around it. |
+| "No transcript" | Run the doctor: it shows whether whisper.cpp and a model are found, and Claude can install them. |
+| Transcription is slow | Normal on older CPUs. Use a smaller model (`ggml-base.bin`) or an online service. |
+| API key rejected | Re-copy the key: no quotes, no spaces around it. Test it with `/reels2claude:doctor --check-keys`. |
 
 ## How it works
 
@@ -146,7 +152,7 @@ link or video file
       ▼
 fetch-reel.mjs ── yt-dlp ──► video (or every carousel slide) + caption
       │           ffmpeg ──► frames: evenly spaced + right after scene cuts, duplicates skipped
-      │           ffmpeg ──► audio ──► Groq / OpenAI / Gemini / whisper.cpp ──► transcript
+      │           ffmpeg ──► audio ──► whisper.cpp (or Groq / OpenAI / Gemini) ──► transcript
       ▼
 one JSON result ──► Claude reads frames + transcript + caption
                     ──► extracts claims ──► judges each (reference/claims.md)
@@ -159,7 +165,7 @@ one JSON result ──► Claude reads frames + transcript + caption
 skills/reel/SKILL.md     the instructions Claude follows (/reels2claude:reel)
 skills/doctor/SKILL.md   setup checker (/reels2claude:doctor)
 skills/reel/reference/   claims.md: the claims reels repeat most, with the real nuance
-skills/reel/scripts/     fetch-reel.mjs, doctor.mjs, lib/ (no npm dependencies)
+skills/reel/scripts/     fetch-reel.mjs, doctor.mjs, install-whisper.mjs, lib/ (no npm dependencies)
 tests/                   unit tests (node --test)
 ```
 
@@ -168,6 +174,7 @@ tests/                   unit tests (node --test)
 ```bash
 node --test "tests/*.test.mjs"                      # unit tests
 node skills/reel/scripts/doctor.mjs --check-keys    # setup check
+node skills/reel/scripts/install-whisper.mjs        # whisper.cpp + model (--model small|base|tiny)
 node skills/reel/scripts/fetch-reel.mjs <reel link or video file>
 claude plugin validate --strict .                   # plugin manifest check
 claude --plugin-dir .                               # run Claude Code with this checkout loaded
@@ -179,11 +186,13 @@ For development, a `.env` in the repo root is read before `~/.reels2claude/.env`
 
 - Tested end to end: local video files, direct video links, real Instagram reels and carousel
   posts (no login needed in our tests), frame extraction (scene cuts + duplicate skipping), the
-  doctor, and plugin validation.
+  doctor, plugin validation, and local transcription with whisper.cpp (`ggml-small.bin`, Windows),
+  including a fresh automatic install of it on Windows.
 - Tested against the live APIs **up to authentication** (the request reaches the service; a bad
   key gets a clear, key-free error): Groq, OpenAI, Gemini.
-- **Not yet tested:** a successful transcription with a real key, downloads of real TikTok
-  videos, and whisper.cpp. All are implemented from official docs.
+- **Not yet tested:** a successful transcription with a real API key, downloads of real TikTok
+  videos, and installing/running whisper.cpp on macOS and Linux. All are implemented from official
+  docs.
 
 ## License
 

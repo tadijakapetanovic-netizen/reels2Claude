@@ -1,11 +1,14 @@
 // Finding and running the external programs (yt-dlp, ffmpeg, ffprobe, whisper.cpp).
 // Everything is spawned without a shell, so URLs and file paths are never re-parsed.
 import { spawn } from 'node:child_process';
-import { statSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
+import { USER_CONFIG_DIR } from './config.mjs';
 
 export const IS_WIN = process.platform === 'win32';
+// Drop a downloaded whisper.cpp model here and it's found without any settings.
+export const WHISPER_MODELS_DIR = join(USER_CONFIG_DIR, 'models');
 
 // Places tools commonly land that may be missing from PATH, e.g. right after an
 // install, before the terminal (or Claude Code) has been restarted.
@@ -63,10 +66,31 @@ export function resolveTools(values) {
   };
 }
 
+// With several models in the folder, the biggest file is the most accurate one.
+export function findWhisperModel(dir = WHISPER_MODELS_DIR) {
+  let names;
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return null;
+  }
+  let best = null;
+  for (const name of names) {
+    if (!/^ggml-.+\.bin$/i.test(name)) continue;
+    try {
+      const stat = statSync(join(dir, name));
+      if (stat.isFile() && (!best || stat.size > best.size)) best = { path: join(dir, name), size: stat.size };
+    } catch {
+      // unreadable entry: skip it
+    }
+  }
+  return best?.path ?? null;
+}
+
 // whisper.cpp needs both its binary and a downloaded model file.
-export function checkLocalWhisper(values) {
+export function checkLocalWhisper(values, modelsDir = WHISPER_MODELS_DIR) {
   const bin = findExecutable(['whisper-cli', 'whisper-cpp'], values.WHISPER_CPP_BIN);
-  const model = values.WHISPER_CPP_MODEL;
+  const model = values.WHISPER_CPP_MODEL || findWhisperModel(modelsDir);
   if (!bin) {
     return {
       ok: false,
@@ -75,7 +99,7 @@ export function checkLocalWhisper(values) {
         : 'whisper.cpp (whisper-cli) is not installed',
     };
   }
-  if (!model) return { ok: false, problem: 'WHISPER_CPP_MODEL is not set (path to a ggml-*.bin model file)' };
+  if (!model) return { ok: false, problem: `no model found (put a ggml-*.bin model file in ${modelsDir})` };
   if (!isFile(model)) return { ok: false, problem: `WHISPER_CPP_MODEL points to "${model}", which doesn't exist` };
   return { ok: true, bin, model };
 }
