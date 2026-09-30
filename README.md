@@ -205,4 +205,5 @@ For development, a `.env` in the repo root is read before `~/.reels2claude/.env`
 
 ## License
 
-Not chosen yet.
+[MIT](LICENSE): free to use, change and share, including commercially, as long as the copyright
+notice is kept. No warranty.
