@@ -88,7 +88,8 @@ Already have whisper.cpp? It's detected and nothing is reinstalled. Any `ggml-*.
 automatically.
 
 Speed depends on your computer: a modern laptop is quick, while a 2012 desktop CPU needs about
-4 seconds per second of audio.
+4 seconds per second of audio. On Linux, the first install compiles whisper.cpp from source, which
+takes around 10 to 15 minutes.
 
 **Switching to an online service later:** put the key in
 `~/.reels2claude/.env` (e.g. `GROQ_API_KEY=...`) and, if whisper.cpp is also installed, add
@@ -191,15 +192,16 @@ For development, a `.env` in the repo root is read before `~/.reels2claude/.env`
 
 **Test status (v0.1.0):**
 
-- Tested end to end: local video files, direct video links, real Instagram reels and carousel
-  posts (no login needed in our tests), frame extraction (scene cuts + duplicate skipping), the
-  doctor, plugin validation, and local transcription with whisper.cpp (`ggml-small.bin`, Windows),
-  including a fresh automatic install of it on Windows.
+- Tested end to end: real Instagram reels and carousel posts (no login needed in our tests), local
+  video files, frame extraction, the doctor, plugin validation, installing the plugin from GitHub,
+  and the full `/reels2claude:reel` check on real reels.
+- Automatic tests on every push (GitHub Actions, Ubuntu + macOS + Windows): unit tests, a fresh
+  whisper.cpp install (Homebrew on macOS, built from source on Linux, official build on Windows),
+  and a real transcription of a spoken test clip.
 - Tested against the live APIs **up to authentication** (the request reaches the service; a bad
   key gets a clear, key-free error): Groq, OpenAI, Gemini.
-- **Not yet tested:** a successful transcription with a real API key, downloads of real TikTok
-  videos, and installing/running whisper.cpp on macOS and Linux. All are implemented from official
-  docs.
+- **Not yet tested:** a successful transcription with a real API key (experimental), and
+  non-English reels.
 
 ## License
 
