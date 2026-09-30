@@ -25,7 +25,7 @@ const INSTALL = {
     mac: ['brew install yt-dlp', 'No Homebrew? Install it first from https://brew.sh'],
     linux: [
       'mkdir -p ~/.local/bin && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o ~/.local/bin/yt-dlp && chmod a+rx ~/.local/bin/yt-dlp',
-      '(Distro packages of yt-dlp are often too old to download from TikTok/Instagram.)',
+      '(Distro packages of yt-dlp are often too old to download from Instagram.)',
     ],
   },
   ffmpeg: {
@@ -120,7 +120,7 @@ async function main() {
   const age = ytdlpAgeDays(ytdlpVersion);
   if (age !== null && age > 60) {
     report.warnings.push(
-      `yt-dlp is ${age} days old. TikTok and Instagram change often, so old versions break. Update: ${ytdlpUpdateCommand(tools.ytdlp)}`
+      `yt-dlp is ${age} days old. Instagram changes often, so old versions break. Update: ${ytdlpUpdateCommand(tools.ytdlp)}`
     );
   }
 
@@ -143,9 +143,34 @@ async function main() {
     report.transcription.providers[name] = entry;
   }
   const choice = selectProvider(config.values, checkLocalWhisper);
-  report.transcription.selected = choice.name ? { name: choice.name, label: PROVIDERS[choice.name]?.label ?? 'none', model: choice.model } : null;
-  if (!choice.name) {
-    report.transcription.problem = choice.reason;
+  // A key that fails the online check can't transcribe; reels then fall back to whisper.cpp
+  // when it's installed, exactly as fetch-reel does.
+  let effective = choice;
+  const selectedCheck = report.transcription.providers[choice.name]?.check;
+  if (selectedCheck && !selectedCheck.ok) {
+    const local = checkLocalWhisper(config.values);
+    effective = local.ok
+      ? { name: 'local', model: local.model, fallbackFrom: choice.name }
+      : { name: null, reason: `the ${PROVIDERS[choice.name].label} key failed the online check: ${selectedCheck.message}` };
+  }
+  for (const [name, p] of Object.entries(report.transcription.providers)) {
+    if (!p.check || p.check.ok) continue;
+    const consequence =
+      name !== choice.name
+        ? 'It is not being used right now, but fix or remove it.'
+        : effective.name === 'local'
+          ? 'Reels will be transcribed with whisper.cpp instead.'
+          : 'Speech will not be transcribed until this is fixed.';
+    report.warnings.push(`The ${PROVIDERS[name].label} key failed the online check: ${p.check.message}. ${consequence}`);
+  }
+  if (effective.name && effective.name !== 'local' && !args.has('--check-keys')) {
+    report.warnings.push(`The ${PROVIDERS[effective.name].label} key hasn't been tested yet. Run the doctor with --check-keys to confirm it works.`);
+  }
+  report.transcription.selected = effective.name
+    ? { name: effective.name, label: PROVIDERS[effective.name].label, model: effective.model, fallbackFrom: effective.fallbackFrom ?? null }
+    : null;
+  if (!effective.name) {
+    report.transcription.problem = effective.reason;
     report.fixes.push({
       what: 'Set up transcription (optional, but without it only on-screen text and the caption are used)',
       commands: [
@@ -163,7 +188,7 @@ async function main() {
   }
 
   const toolsOk = report.node.ok && Object.values(report.tools).every((t) => t.ok);
-  report.status = !toolsOk ? 'not_ready' : choice.name ? 'ready' : 'ready_without_transcription';
+  report.status = !toolsOk ? 'not_ready' : effective.name ? 'ready' : 'ready_without_transcription';
 
   if (args.has('--json')) {
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
@@ -193,9 +218,10 @@ function printReport(r) {
     if (p.check) line += `\n             online check: ${p.check.message}`;
     lines.push(line);
   }
+  const sel = r.transcription.selected;
   lines.push(
-    r.transcription.selected
-      ? `  -> will use: ${r.transcription.selected.label} (${r.transcription.selected.model ?? 'default model'})`
+    sel
+      ? `  -> will use: ${sel.label} (${sel.model ?? 'default model'})${sel.fallbackFrom ? `, because the ${PROVIDERS[sel.fallbackFrom].label} key failed` : ''}`
       : `  -> none: ${r.transcription.problem}`
   );
   lines.push('', 'Settings files (checked in this order, real environment variables win)');

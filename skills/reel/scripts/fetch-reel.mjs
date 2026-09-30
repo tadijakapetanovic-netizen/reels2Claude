@@ -1,23 +1,22 @@
 #!/usr/bin/env node
-// Turns a reel URL (or a local screen recording) into things Claude can read:
+// Turns an Instagram reel URL (or a local screen recording) into things Claude can read:
 // the caption, a transcript of the speech, and a set of still frames for on-screen text.
-// Multi-slide posts (Instagram carousels) work too: each picture slide becomes one image, and
-// each video slide is handled like a reel.
+// Carousel posts work too: each picture slide becomes one image, and each video slide is
+// handled like a reel.
 // Prints exactly one JSON object to stdout. Exit code 0 = usable result, 1 = failed.
 //
-// Usage: node fetch-reel.mjs <url-or-video-file> [--out DIR] [--provider local|groq|openai|gemini|none]
+// Usage: node fetch-reel.mjs <instagram-url-or-video-file> [--out DIR] [--provider local|groq|openai|gemini|none]
 //                            [--cookies-from-browser BROWSER] [--keep-media]
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, extname, join, resolve } from 'node:path';
 import { loadConfig, PROVIDERS, selectProvider, USER_CONFIG_DIR } from './lib/config.mjs';
 import {
-  detectPlatform,
   detectSceneChanges,
   downloadPost,
   extractAudio,
   extractFrames,
   formatClock,
-  isTikTokPhotoPost,
+  isInstagramUrl,
   metaFromInfo,
   pickFrameTimes,
   probe,
@@ -39,7 +38,8 @@ function parseArgs(argv) {
     else if (a === '--no-transcribe') opts.provider = 'none';
     else if (a === '--cookies-from-browser') opts.cookies = argv[++i];
     else if (a === '--keep-media') opts.keepMedia = true;
-    else if (!opts.input) opts.input = a;
+    // Links pasted from files or chats can carry spaces or a Windows line ending.
+    else if (!opts.input) opts.input = a.trim();
   }
   return opts;
 }
@@ -70,7 +70,7 @@ function timestamped(segments, text) {
 }
 
 // Frames and transcript for one video: the whole reel, or one video slide of a post.
-async function processVideo({ videoPath, workDir, tools, config, choice, prefix, platform }) {
+async function processVideo({ videoPath, workDir, tools, config, choice, prefix }) {
   const info = await probe(videoPath, tools.ffprobe);
   if (!info.ok) return { ok: false, error: info.error };
   const out = { ok: true, durationSec: info.durationSec, frames: [], duplicates: 0, transcript: null, note: null, warnings: [] };
@@ -93,8 +93,6 @@ async function processVideo({ videoPath, workDir, tools, config, choice, prefix,
     out.frames = frames;
     out.duplicates = duplicates;
     if (!frames.length) out.warnings.push('No frames could be extracted, so on-screen text is not available.');
-  } else if (platform === 'tiktok') {
-    out.warnings.push(`Only sound was downloaded. If this is a TikTok photo slideshow, its pictures can't be downloaded: ${SCREENSHOT_FALLBACK.toLowerCase()}`);
   } else {
     out.warnings.push('The file has no video track, so there is no on-screen text to read.');
   }
@@ -175,7 +173,7 @@ function mergeTranscripts(parts) {
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (opts.help || !opts.input) {
-    return fail('input', 'Usage: node fetch-reel.mjs <reel URL or path to a video file> [--provider local|groq|openai|gemini|none]');
+    return fail('input', 'Usage: node fetch-reel.mjs <Instagram reel URL or path to a video file> [--provider local|groq|openai|gemini|none]');
   }
 
   const config = loadConfig();
@@ -193,12 +191,15 @@ async function main() {
         imagePath: inputPath,
       });
     }
-  } else if (isTikTokPhotoPost(opts.input)) {
-    return fail('download', "TikTok photo slideshows can't be downloaded (the downloader only gets their background music).", {
-      reason: 'photo_post',
-      platform: 'tiktok',
-      hint: SCREENSHOT_FALLBACK,
-      fallbacks: [SCREENSHOT_FALLBACK, 'Paste the caption and type out what the slides say.'],
+  } else if (!isInstagramUrl(opts.input)) {
+    return fail('input', 'Only Instagram links (reels and carousel posts) are supported for now.', {
+      reason: 'unsupported_platform',
+      hint: 'For a video from another app, screen-record it and pass the recording file instead of the link.',
+      fallbacks: [
+        'Screen-record the video (phone or computer) and pass the recording file.',
+        'Take screenshots of the post and share those.',
+        'Paste the caption and describe or type out what is said and shown.',
+      ],
     });
   }
 
@@ -220,7 +221,7 @@ async function main() {
       reason: 'not_set_up',
       choices: [
         { id: 'install_whisper', label: 'Install whisper.cpp: free, private, runs on this computer (about 500 MB download)', run: 'install-whisper.mjs' },
-        { id: 'api_key', label: 'Use an API key the user already has (Groq, OpenAI or Google Gemini)', keyFile: join(USER_CONFIG_DIR, '.env') },
+        { id: 'api_key', label: 'Use an API key the user already has (Groq, OpenAI or Google Gemini; experimental)', keyFile: join(USER_CONFIG_DIR, '.env') },
         { id: 'skip', label: 'Skip transcription this time: use on-screen text and caption only', rerunWith: '--no-transcribe' },
       ],
     });
@@ -234,7 +235,7 @@ async function main() {
     writeFileSync(join(outBase, '.gitignore'), '*\n');
   }
 
-  const platform = isUrl ? detectPlatform(opts.input) : 'local';
+  const platform = isUrl ? 'instagram' : 'local';
   const workDir = makeWorkDir(outBase, platform);
   const warnings = [];
 
@@ -250,14 +251,13 @@ async function main() {
       const screenshots = dl.reason === 'no_media';
       return fail('download', dl.message, {
         reason: dl.reason,
-        platform: dl.platform,
         hint: dl.hint,
         usedBrowserCookies: Boolean(cookies),
         details: dl.details,
         fallbacks: [
           screenshots ? SCREENSHOT_FALLBACK : 'Screen-record the video (phone or computer) and pass the recording file instead of the link.',
           'Paste the caption and describe or type out what is said and shown.',
-          ...(dl.platform === 'instagram' && !cookies
+          ...(!cookies
             ? ['Opt in to using a browser login: set REELS2CLAUDE_COOKIES_FROM_BROWSER=firefox (while logged in to Instagram in Firefox).']
             : []),
         ],
@@ -292,7 +292,6 @@ async function main() {
       config,
       choice,
       prefix: isPost ? `slide-${pad2(slide)}-` : '',
-      platform,
     });
     if (!video.ok) {
       if (!isPost) {

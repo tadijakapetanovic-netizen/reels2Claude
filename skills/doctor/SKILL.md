@@ -23,8 +23,9 @@ Then explain the result in plain language for a non-technical user:
 - For each item under "To fix", give the exact command. Offer to run install commands for them, and
   run them only after they say yes. After installing, run the doctor again to confirm.
 - **Transcription:** the default is whisper.cpp, which runs locally, is free, and uploads nothing.
-  An online API (Groq, OpenAI, Gemini) is optional: it's used when the user sets
-  `REELS2CLAUDE_PROVIDER` to it, or when whisper.cpp isn't installed and a key is set.
+  An online API (Groq, OpenAI, Gemini) is optional and experimental (not yet tested end to end): it's
+  used when the user sets `REELS2CLAUDE_PROVIDER` to it, or when whisper.cpp isn't installed and a key
+  is set.
 - **API keys:** never ask the user to paste a key into the chat, because the conversation isn't a
   safe place for secrets. Instead, tell them which file to put it in (the doctor prints the path,
   normally `~/.reels2claude/.env`) and the exact line to add, e.g. `GROQ_API_KEY=...`. If the file

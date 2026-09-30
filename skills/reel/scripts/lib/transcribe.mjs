@@ -7,6 +7,14 @@ import { join } from 'node:path';
 import { PROVIDERS } from './config.mjs';
 import { run } from './tools.mjs';
 
+// Whisper reads this as text that came before the audio, which nudges it toward spelling these
+// terms correctly. On 4 real reels it fixed "core settings" -> "CORS settings" and "DC realisation"
+// -> "deserialization", and it produced no text on a music-only clip.
+export const VOCABULARY_PROMPT =
+  'Vibe-coded app security tips: Supabase RLS (row level security), API keys, .env files, CORS, CSRF, XSS, SSRF, ' +
+  'SQL injection, CI/CD, npm lockfile, GraphQL, Next.js, Firebase, Stripe webhooks, JWT, OAuth, MFA, HSTS, ' +
+  'deserialization, rate limiting, prompt injection, Claude Code, Cursor.';
+
 export class TranscriptionError extends Error {
   constructor(message, hint) {
     super(message);
@@ -50,6 +58,7 @@ async function openAiCompatible({ endpoint, key, model, audioPath, verbose, labe
   form.append('model', model);
   form.append('response_format', verbose ? 'verbose_json' : 'json');
   form.append('temperature', '0');
+  form.append('prompt', VOCABULARY_PROMPT);
   const json = await postJson(endpoint, { headers: { Authorization: `Bearer ${key}` }, body: form }, key, label);
   return {
     text: (json.text || '').trim(),
@@ -103,7 +112,7 @@ async function whisperCpp({ bin, model, audioPath, workDir, durationSec }) {
   const timeoutMs = whisperTimeoutMs(durationSec);
   // All CPU threads (whisper.cpp uses 4 by default) and greedy decoding: in our tests about twice as
   // fast as the defaults, with the same transcript.
-  const args = ['-m', model, '-f', audioPath, '-l', 'auto', '-t', String(cpuThreads()), '-bs', '1', '-bo', '1'];
+  const args = ['-m', model, '-f', audioPath, '-l', 'auto', '-t', String(cpuThreads()), '-bs', '1', '-bo', '1', '--prompt', VOCABULARY_PROMPT];
   const res = await run(bin, [...args, '-oj', '-otxt', '-of', outBase, '-np'], { timeoutMs });
   if (res.code !== 0) {
     throw new TranscriptionError(

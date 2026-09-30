@@ -40,7 +40,12 @@ export function pickModel(files, name) {
 }
 
 export async function getJson(url) {
-  const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(30_000) });
+  const headers = { ...HEADERS };
+  // Anonymous GitHub API calls are limited per IP, which shared CI machines hit quickly.
+  if (process.env.GITHUB_TOKEN && new URL(url).host === 'api.github.com') {
+    headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+  }
+  const res = await fetch(url, { headers, signal: AbortSignal.timeout(30_000) });
   if (!res.ok) throw new Error(`${new URL(url).host} returned HTTP ${res.status}`);
   return res.json();
 }

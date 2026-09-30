@@ -1,8 +1,8 @@
 ---
 name: reel
-description: Check whether advice from a short video or carousel post (TikTok, Instagram Reel or carousel, YouTube Short, X) is true and whether it applies to this codebase. Transcribes the video, reads its on-screen text or slides, judges each claim, inspects the project, and reports verdicts with proposed changes for the user to approve.
-when_to_use: Use when the user shares a reel, TikTok, carousel post, or short-video link (or a screen recording or screenshots of one) and asks whether their app needs what it says, e.g. "does this apply to me?", "do I need this?", "this guy says my vibe-coded app needs RLS", or pastes a bare tiktok.com / instagram.com/reel / instagram.com/p / youtube.com/shorts link in a coding session.
-argument-hint: <reel URL or path to a screen recording>
+description: Check whether advice from an Instagram reel or carousel post is true and whether it applies to this codebase. Transcribes the reel, reads its on-screen text or slides, judges each claim, inspects the project, and reports verdicts with proposed changes for the user to approve.
+when_to_use: Use when the user shares an Instagram reel or carousel link (or a screen recording or screenshots of a short video) and asks whether their app needs what it says, e.g. "does this apply to me?", "do I need this?", "this guy says my vibe-coded app needs RLS", or pastes a bare instagram.com/reel or instagram.com/p link in a coding session.
+argument-hint: <Instagram reel URL or path to a screen recording>
 allowed-tools:
   - Bash(node "${CLAUDE_SKILL_DIR}/scripts/fetch-reel.mjs" *)
   - Bash(node "${CLAUDE_SKILL_DIR}/scripts/doctor.mjs")
@@ -36,7 +36,8 @@ Input: $ARGUMENTS
 
 Find the link or file path in the input (or in the recent conversation). If there is none, ask for it.
 If the user instead pasted the caption or described the video, skip to Step 2 with that text.
-If they gave screenshots, read them directly and skip to Step 2.
+If they gave screenshots, read them directly and skip to Step 2. Only Instagram links can be
+downloaded; for a video from any other app, ask for a screen recording or screenshots.
 
 Run from the project root, putting the link in single quotes:
 
@@ -62,7 +63,7 @@ It prints one JSON object. Handle it like this:
      transcribe. After they say yes, run `node "${CLAUDE_SKILL_DIR}/scripts/install-whisper.mjs"` (it
      takes a few minutes; say so). If `ok` is false, explain `message` and any failed step's
      `commands`, offer to run those commands, run them only after a yes, then run the installer again.
-  2. **Use an API key they already have:** ask which service (Groq, OpenAI or Google Gemini). Never
+  2. **Use an API key they already have** (experimental): ask which service (Groq, OpenAI or Google Gemini). Never
      ask them to paste the key into the chat. Tell them to add one line, `GROQ_API_KEY=...`,
      `OPENAI_API_KEY=...` or `GEMINI_API_KEY=...`, to the file in `keyFile` (you may create it with
      that line and an empty value for them to fill in). When they say it's done, run the doctor with
@@ -73,12 +74,13 @@ It prints one JSON object. Handle it like this:
   Then rerun the fetch-reel command.
 - **`"stage": "download"`**: explain `message` in one plain sentence, then offer the `fallbacks`, the
   simplest first: screen-record the reel and give the file path (then rerun the script with that path),
-  or paste the caption and describe what's said. If `reason` is `no_media` or `photo_post`, it's a
-  picture post that can't be downloaded: ask for screenshots of every slide instead. If `reason` is
+  or paste the caption and describe what's said. If `reason` is `no_media`, it's a picture post
+  that can't be downloaded: ask for screenshots of every slide instead. If `reason` is
   `extractor_broken`, suggest updating yt-dlp (the doctor prints the command). Browser cookies are opt-in: explain that it lets the
   downloader use their logged-in browser session, and only suggest it, never turn it on yourself.
 - **`"stage": "input"`, `"probe"` or `"internal"`**: explain the `message` and ask for a working link or
-  file.
+  file. If `reason` is `unsupported_platform`, offer the `fallbacks` (screen recording, screenshots,
+  or pasting the caption).
 
 ## Step 2: Extract the claims
 
@@ -88,6 +90,11 @@ false about software. For each one, note:
 - the claim in neutral words (e.g. "Supabase tables without Row Level Security can be read by anyone"),
 - what technology it's about, and what the creator says will happen,
 - where it appears (timestamp, frame, or slide), especially if it was shown on screen but not said.
+
+Speech-to-text often mishears technical terms ("core settings" for CORS, "DC realisation" for
+deserialization). When the transcript and the on-screen text disagree, trust the on-screen text. When
+a word is clearly a mishearing of a technical term, use the intended term and mention the correction
+only if it changes a claim's meaning.
 
 Merge duplicates. Separate substance from packaging: urgency ("your app WILL get hacked"), selling
 ("link in bio for my template"), and engagement bait aren't claims, but note them if they distort the
@@ -103,6 +110,11 @@ something fast-moving (a new CVE, a changed default, current pricing), verify wi
 have it and say you did. Otherwise say what you're unsure about. Never invent version numbers or CVE IDs.
 
 ## Step 4: Inspect this codebase
+
+If the current folder isn't a software project (no manifest, config, or source files), say so in one
+sentence and skip the code inspection: in Steps 5 to 7, give each claim its Step 3 rating plus what
+the user should check in their own app, and suggest running the check again from their project
+folder for per-project verdicts.
 
 1. Identify the stack from manifests and config: `package.json` dependencies, lockfiles,
    `next.config.*`, `vite.config.*`, `app.json`/`app.config.*` (Expo), `supabase/`, `firebase.json`,

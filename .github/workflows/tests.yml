@@ -1,0 +1,97 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Unit tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --test "tests/*.test.mjs"
+
+  transcription:
+    name: Install + transcribe (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install yt-dlp, ffmpeg and a text-to-speech voice
+        run: |
+          case "$RUNNER_OS" in
+            Linux)
+              sudo apt-get update -q
+              sudo apt-get install -y -q ffmpeg espeak-ng
+              # The same command the doctor prints for Linux.
+              mkdir -p ~/.local/bin && curl -sSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o ~/.local/bin/yt-dlp && chmod a+rx ~/.local/bin/yt-dlp
+              ;;
+            macOS) brew install ffmpeg yt-dlp ;;
+            Windows) choco install -y --no-progress ffmpeg yt-dlp ;;
+          esac
+
+      - name: Doctor before whisper.cpp
+        run: node skills/reel/scripts/doctor.mjs
+
+      - name: Install whisper.cpp and the tiny model
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node skills/reel/scripts/install-whisper.mjs --model tiny
+
+      - name: Doctor after (whisper.cpp must be selected)
+        run: |
+          node skills/reel/scripts/doctor.mjs
+          node skills/reel/scripts/doctor.mjs --json > doctor.json
+          node -e '
+            const r = JSON.parse(require("fs").readFileSync("doctor.json", "utf8"));
+            if (r.status !== "ready" || r.transcription.selected?.name !== "local") {
+              console.error("unexpected doctor result:", r.status, JSON.stringify(r.transcription));
+              process.exit(1);
+            }'
+
+      - name: Make a short test video with speech
+        run: |
+          TEXT="Enable row level security on every table. Never put secret keys in the browser."
+          case "$RUNNER_OS" in
+            Linux) espeak-ng -s 140 -w speech.wav "$TEXT" ;;
+            macOS) say -o speech.aiff "$TEXT" && ffmpeg -loglevel error -y -i speech.aiff speech.wav ;;
+            Windows) powershell -NoProfile -Command "Add-Type -AssemblyName System.Speech; \$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; \$s.SetOutputToWaveFile('speech.wav'); \$s.Speak('$TEXT'); \$s.Dispose()" ;;
+          esac
+          ffmpeg -loglevel error -y -f lavfi -i color=c=navy:s=360x640:r=10 -i speech.wav -shortest -pix_fmt yuv420p clip.mp4
+
+      - name: fetch-reel on the test video
+        run: |
+          node skills/reel/scripts/fetch-reel.mjs clip.mp4 --out out > result.json || { cat result.json; exit 1; }
+          cat result.json
+          node -e '
+            const r = JSON.parse(require("fs").readFileSync("result.json", "utf8"));
+            const text = (r.transcript?.text || "").toLowerCase();
+            const hits = ["security", "table", "secret", "browser"].filter((w) => text.includes(w));
+            if (r.transcript?.provider !== "local" || hits.length < 2 || !r.frames.length) {
+              console.error("unexpected result:", r.transcript?.provider, JSON.stringify(text), r.frames.length);
+              process.exit(1);
+            }
+            console.log("transcript ok, matched:", hits.join(", "));'

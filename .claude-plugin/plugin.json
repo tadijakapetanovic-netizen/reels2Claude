@@ -2,12 +2,19 @@
   "name": "reels2claude",
   "displayName": "reels2Claude",
   "version": "0.1.0",
-  "description": "Send Claude a TikTok or Instagram reel that says \"your app needs X\". It transcribes the reel, reads its on-screen text, judges whether the advice is actually true, checks whether your codebase already handles it, and proposes changes for you to approve.",
+  "description": "Send Claude an Instagram reel that says \"your app needs X\". It transcribes the reel, reads its on-screen text, judges whether the advice is actually true, checks whether your codebase already handles it, and proposes changes for you to approve.",
   "author": {
     "name": "Tadija Kapetanovic",
     "url": "https://github.com/tadijakapetanovic-netizen"
   },
   "homepage": "https://github.com/tadijakapetanovic-netizen/reels2Claude",
   "repository": "https://github.com/tadijakapetanovic-netizen/reels2Claude",
-  "keywords": ["security", "vibe-coding", "tiktok", "instagram", "reels", "code-review", "transcription"]
+  "keywords": [
+    "security",
+    "vibe-coding",
+    "instagram",
+    "reels",
+    "code-review",
+    "transcription"
+  ]
 }

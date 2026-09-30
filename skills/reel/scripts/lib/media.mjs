@@ -3,29 +3,18 @@ import { existsSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs
 import { join } from 'node:path';
 import { run } from './tools.mjs';
 
-export function detectPlatform(url) {
-  let host = '';
+export function isInstagramUrl(url) {
   try {
-    host = new URL(url).hostname.toLowerCase();
+    const { protocol, hostname } = new URL(url);
+    const host = hostname.toLowerCase();
+    return /^https?:$/.test(protocol) && (/(^|\.)instagram\.com$/.test(host) || host === 'instagr.am');
   } catch {
-    return 'web';
+    return false;
   }
-  if (/(^|\.)tiktok\.com$/.test(host)) return 'tiktok';
-  if (/(^|\.)instagram\.com$/.test(host) || host === 'instagr.am') return 'instagram';
-  if (/(^|\.)youtube\.com$/.test(host) || host === 'youtu.be') return 'youtube';
-  if (/(^|\.)(x|twitter)\.com$/.test(host)) return 'x';
-  if (/(^|\.)facebook\.com$/.test(host) || host === 'fb.watch') return 'facebook';
-  return 'web';
-}
-
-// yt-dlp can't download TikTok photo slideshows: /photo/ links are unsupported, and the same
-// post opened as a /video/ link yields only its background music.
-export function isTikTokPhotoPost(url) {
-  return detectPlatform(url) === 'tiktok' && /\/photo\/\d+/.test(url);
 }
 
 // Turns yt-dlp's error output into a reason Claude can explain to a non-technical user.
-export function classifyDownloadError(stderr, platform) {
+export function classifyDownloadError(stderr) {
   const s = stderr.toLowerCase();
   const pick = (reason, message, hint) => ({ reason, message, hint });
   if (s.includes('no video formats found')) {
@@ -36,7 +25,7 @@ export function classifyDownloadError(stderr, platform) {
     );
   }
   if (s.includes('unsupported url')) {
-    return pick('unsupported', 'This link is not a supported video page.', 'Check the link, or screen-record the video instead.');
+    return pick('unsupported', 'This link is not an Instagram reel or post.', 'Check the link, or screen-record the video instead.');
   }
   if (s.includes('private') && (s.includes('video') || s.includes('account') || s.includes('post'))) {
     return pick('private', 'The video is private or from a private account.', 'Screen-record it on your phone and pass the recording instead.');
@@ -53,7 +42,7 @@ export function classifyDownloadError(stderr, platform) {
   ) {
     return pick(
       'login_required',
-      `${platform === 'instagram' ? 'Instagram' : 'The site'} refused to serve the video without a logged-in browser session.`,
+      'Instagram refused to serve the video without a logged-in browser session.',
       'Screen-record the reel and pass the recording, or opt in to using your browser login (REELS2CLAUDE_COOKIES_FROM_BROWSER=firefox).'
     );
   }
@@ -81,7 +70,6 @@ const IMAGE_FILE = /\.(jpe?g|png|webp|gif|heic|bmp)$/i;
 // no video formats, so yt-dlp saves the picture itself as the "thumbnail" and reports an error
 // for that slide even though the picture arrived. Success is therefore judged by the files.
 export async function downloadPost({ url, workDir, tools, cookiesFromBrowser }) {
-  const platform = detectPlatform(url);
   const args = [
     '--no-playlist',
     '--no-progress',
@@ -96,8 +84,6 @@ export async function downloadPost({ url, workDir, tools, cookiesFromBrowser }) 
     '--output', join(workDir, 'item-%(playlist_index|0)s.%(ext)s'),
   ];
   if (tools.ffmpeg) args.push('--ffmpeg-location', tools.ffmpeg);
-  // YouTube needs a JavaScript runtime; Node is guaranteed to exist because it's running us.
-  if (platform === 'youtube') args.push('--js-runtimes', `node:${process.execPath}`);
   if (cookiesFromBrowser) args.push('--cookies-from-browser', cookiesFromBrowser);
   // "--" stops yt-dlp from reading a crafted URL as an option.
   args.push('--', url);
@@ -106,7 +92,6 @@ export async function downloadPost({ url, workDir, tools, cookiesFromBrowser }) 
   if (res.timedOut) {
     return {
       ok: false,
-      platform,
       reason: 'timeout',
       message: 'The download took longer than 5 minutes.',
       hint: 'Try again, or screen-record the video.',
@@ -117,11 +102,10 @@ export async function downloadPost({ url, workDir, tools, cookiesFromBrowser }) 
     readJson(join(workDir, f))
   );
   if (!items.length) {
-    return { ok: false, platform, ...classifyDownloadError(res.stderr, platform), details: lastLines(res.stderr, 6) };
+    return { ok: false, ...classifyDownloadError(res.stderr), details: lastLines(res.stderr, 6) };
   }
   return {
     ok: true,
-    platform,
     info: post,
     isPost,
     items: items.map((item) => ({ ...item, path: join(workDir, item.file) })),
@@ -172,7 +156,7 @@ export function metaFromInfo(info, fallbackUrl) {
     ? `${info.upload_date.slice(0, 4)}-${info.upload_date.slice(4, 6)}-${info.upload_date.slice(6, 8)}`
     : null;
   const caption = info.description || null;
-  // TikTok and Instagram often repeat the caption as the title, or use "Video by <user>".
+  // Instagram often repeats the caption as the title, or uses "Video by <user>".
   const title = info.title && info.title !== caption ? info.title : null;
   return {
     id: info.id ?? null,
@@ -278,6 +262,10 @@ export function pickFrameTimes(durationSec, scenes = [], { perSeconds = 4, min =
       added++;
     }
   }
+  // List reels build up on screen and show their last item in the final second or two, so
+  // the very end is often the most complete frame.
+  const end = durationSec - 0.5;
+  if (end > 0 && !times.some((x) => x >= end - 0.5)) times.push(end);
   return times.sort((a, b) => a - b).map((x) => Math.round(x * 100) / 100);
 }
 

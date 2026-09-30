@@ -8,10 +8,9 @@ import { loadConfig, parseEnv, readTextFile, selectProvider } from '../skills/re
 import {
   classifyDownloadError,
   collectDownloads,
-  detectPlatform,
   formatClock,
   frameDifference,
-  isTikTokPhotoPost,
+  isInstagramUrl,
   metaFromInfo,
   pickFrameTimes,
 } from '../skills/reel/scripts/lib/media.mjs';
@@ -104,42 +103,35 @@ test('selectProvider: model override applies to API providers', () => {
   assert.equal(selectProvider({ GROQ_API_KEY: 'y' }, noLocal).model, 'whisper-large-v3-turbo');
 });
 
-test('detectPlatform', () => {
-  assert.equal(detectPlatform('https://www.tiktok.com/@a/video/1'), 'tiktok');
-  assert.equal(detectPlatform('https://vm.tiktok.com/ZMabc/'), 'tiktok');
-  assert.equal(detectPlatform('https://www.instagram.com/reel/ABC/?igsh=x'), 'instagram');
-  assert.equal(detectPlatform('https://youtube.com/shorts/xyz'), 'youtube');
-  assert.equal(detectPlatform('https://youtu.be/xyz'), 'youtube');
-  assert.equal(detectPlatform('https://x.com/a/status/1'), 'x');
-  assert.equal(detectPlatform('https://example.com/v.mp4'), 'web');
-  assert.equal(detectPlatform('not a url'), 'web');
+test('isInstagramUrl accepts Instagram links only', () => {
+  assert.ok(isInstagramUrl('https://www.instagram.com/reel/ABC/?igsh=x'));
+  assert.ok(isInstagramUrl('https://instagram.com/p/ABC/'));
+  assert.ok(isInstagramUrl('http://instagr.am/p/ABC/'));
+  assert.ok(!isInstagramUrl('https://www.tiktok.com/@a/video/1'));
+  assert.ok(!isInstagramUrl('https://youtube.com/shorts/xyz'));
+  assert.ok(!isInstagramUrl('https://notinstagram.com/reel/ABC/'));
+  assert.ok(!isInstagramUrl('https://instagram.com.evil.example/reel/ABC/'));
+  assert.ok(!isInstagramUrl('ftp://instagram.com/reel/ABC/'));
+  assert.ok(!isInstagramUrl('not a url'));
 });
 
 test('classifyDownloadError maps yt-dlp errors to plain reasons', () => {
   const ig = classifyDownloadError(
-    'ERROR: [Instagram] ABC: Requested content is not available, rate-limit reached or login required. Use --cookies-from-browser',
-    'instagram'
+    'ERROR: [Instagram] ABC: Requested content is not available, rate-limit reached or login required. Use --cookies-from-browser'
   );
   assert.equal(ig.reason, 'login_required');
   assert.match(ig.message, /Instagram/);
-  assert.equal(classifyDownloadError('ERROR: Unsupported URL: https://x', 'web').reason, 'unsupported');
-  assert.equal(classifyDownloadError('ERROR: [TikTok] 1: This video is private', 'tiktok').reason, 'private');
-  assert.equal(classifyDownloadError('ERROR: [TikTok] 1: Unable to extract universal data', 'tiktok').reason, 'extractor_broken');
-  assert.equal(classifyDownloadError('ERROR: HTTP Error 404: Not Found', 'tiktok').reason, 'unavailable');
-  assert.equal(classifyDownloadError('something odd', 'tiktok').reason, 'unknown');
+  assert.equal(classifyDownloadError('ERROR: Unsupported URL: https://www.instagram.com/someone/').reason, 'unsupported');
+  assert.equal(classifyDownloadError('ERROR: [Instagram] ABC: This account is private').reason, 'private');
+  assert.equal(classifyDownloadError('ERROR: [Instagram] ABC: Unable to extract shared data').reason, 'extractor_broken');
+  assert.equal(classifyDownloadError('ERROR: HTTP Error 404: Not Found').reason, 'unavailable');
+  assert.equal(classifyDownloadError('something odd').reason, 'unknown');
   // A picture post whose pictures didn't arrive is not a broken downloader (don't say "update yt-dlp").
   const pics = classifyDownloadError(
-    'ERROR: [Instagram] DbD55mhMwDF: No video formats found!; please report this issue on https://github.com/yt-dlp/yt-dlp/issues',
-    'instagram'
+    'ERROR: [Instagram] DbD55mhMwDF: No video formats found!; please report this issue on https://github.com/yt-dlp/yt-dlp/issues'
   );
   assert.equal(pics.reason, 'no_media');
   assert.match(pics.hint, /screenshots/);
-});
-
-test('isTikTokPhotoPost', () => {
-  assert.ok(isTikTokPhotoPost('https://www.tiktok.com/@someone/photo/7412345678901234567'));
-  assert.ok(!isTikTokPhotoPost('https://www.tiktok.com/@someone/video/7412345678901234567'));
-  assert.ok(!isTikTokPhotoPost('https://www.instagram.com/p/ABC/photo/1'));
 });
 
 // Mirrors what yt-dlp saved in real runs (2026-09-29): a 9-picture Instagram carousel and a reel.
@@ -207,10 +199,11 @@ test('collectDownloads: mixed carousel and a single-picture post', () => {
 
 test('pickFrameTimes: spacing, bounds, and scene-change extras', () => {
   const plain = pickFrameTimes(40);
-  assert.equal(plain.length, 10);
+  assert.equal(plain.length, 11, '10 evenly spaced + 1 at the very end');
   assert.ok(plain.every((t) => t > 0 && t < 40));
-  assert.equal(pickFrameTimes(10).length, 6, 'short videos still get the minimum');
-  assert.equal(pickFrameTimes(600).length, 16, 'long videos are capped');
+  assert.equal(plain.at(-1), 39.5, 'the final state of a list reel is captured');
+  assert.equal(pickFrameTimes(10).length, 6, 'short videos still get the minimum; the last one is already near the end');
+  assert.equal(pickFrameTimes(600).length, 17, 'long videos are capped (+ end frame)');
   const withScenes = pickFrameTimes(40, [2.0, 2.1, 7.9, 39.9]);
   assert.ok(withScenes.includes(8.3), 'scene cut away from grid frames is added (nudged +0.4s)');
   assert.ok(!withScenes.some((t) => t > 39.8), 'cuts at the very end are skipped');
@@ -224,7 +217,7 @@ test('pickFrameTimes prefers the strongest scene cuts when there are more than i
   // A 60s video has grid frames every 4s; offer 10 candidate cuts that each fit between grid frames.
   const cuts = Array.from({ length: 10 }, (_, i) => ({ t: 4 + i * 4, score: i === 7 ? 0.9 : 0.05 + i * 0.001 }));
   const times = pickFrameTimes(60, cuts, { extra: 1 });
-  assert.equal(times.length, 16);
+  assert.equal(times.length, 17);
   assert.ok(times.includes(32.4), 'the 0.9-score cut at 32s wins over earlier, weaker cuts');
 });
 
@@ -249,7 +242,7 @@ test('frameDifference: identical is 0, different sizes are never duplicates', ()
 test('metaFromInfo maps yt-dlp info and drops a title that duplicates the caption', () => {
   const meta = metaFromInfo({
     id: '123',
-    webpage_url: 'https://www.tiktok.com/@dev/video/123',
+    webpage_url: 'https://www.instagram.com/reel/123/',
     title: 'You need RLS #supabase',
     description: 'You need RLS #supabase',
     uploader: 'dev',

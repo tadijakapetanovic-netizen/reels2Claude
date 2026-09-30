@@ -2,8 +2,8 @@
 
 **Saw a reel telling you your vibe-coded app "needs" something? Send it to Claude.**
 
-TikTok and Instagram are full of videos like *"If you built your app with AI, you're leaking your
-whole database!"* Some are right, some are outdated, and some are just engagement bait. If you
+Instagram is full of reels like *"If you built your app with AI, you're leaking your whole
+database!"* Some are right, some are outdated, and some are just engagement bait. If you
 aren't a security expert, you can't tell which, and you don't have time to research every one.
 
 reels2Claude is a [Claude Code](https://code.claude.com) plugin. Give it the link, and Claude:
@@ -17,7 +17,7 @@ reels2Claude is a [Claude Code](https://code.claude.com) plugin. Give it the lin
    code changes until you pick what to implement.**
 
 ```
-You:    /reels2claude:reel https://www.tiktok.com/@someone/video/123
+You:    /reels2claude:reel https://www.instagram.com/reel/ABC123/
 Claude: Bottom line: 2 of the 4 claims apply to you, and one is urgent.
 
         | # | Claim                              | Verdict                         |
@@ -78,7 +78,9 @@ before anything is downloaded:
    [whisper.cpp](https://github.com/ggml-org/whisper.cpp) plus a speech model (about 500 MB,
    checksum-verified) into `~/.reels2claude/models/`.
 2. **Use an API key you already have** (Groq, OpenAI or Google Gemini). Claude tells you which file
-   to put it in; never paste a key into the chat.
+   to put it in; never paste a key into the chat. *Experimental:* built from each service's docs,
+   but a successful transcription through an API hasn't been tested yet. If it fails and
+   whisper.cpp is installed, whisper.cpp takes over automatically.
 3. **Skip it for now.** Claude uses the on-screen text and caption only, and asks again next time.
 
 Already have whisper.cpp? It's detected and nothing is reinstalled. Any `ggml-*.bin` model in
@@ -105,6 +107,10 @@ In your project, in Claude Code:
 
 Carousel posts (`instagram.com/p/...`) work the same way. Or just paste the link and ask
 *"does this apply to my app?"*
+
+**Only Instagram links for now.** Saw the same kind of video on TikTok, YouTube or X? Screen-record
+it (or take screenshots) and give Claude the file instead. Run it outside a project and you still
+get the claims and whether each piece of advice is right, just without the per-project verdicts.
 
 **Instagram blocked the download?** It often does. Screen-record the reel on your phone, move the
 file to your computer, and give Claude the path:
@@ -139,7 +145,8 @@ your project, so you keep a history of what you've already checked.
 | "Missing required tool" | Run the doctor and follow its commands. |
 | Downloads fail with "unable to extract" | Sites change often; update yt-dlp (the doctor prints the command). |
 | Instagram "login required" | Screen-record the reel instead, or opt in to browser cookies. |
-| TikTok photo slideshow, or a picture post that won't download | Take screenshots of every slide and give them to Claude. |
+| A link from TikTok, YouTube, X or another app | Only Instagram links download; screen-record the video or take screenshots instead. |
+| A picture post that won't download | Take screenshots of every slide and give them to Claude. |
 | "No transcript" | Run the doctor: it shows whether whisper.cpp and a model are found, and Claude can install them. |
 | Transcription is slow | Normal on older CPUs. Use a smaller model (`ggml-base.bin`) or an online service. |
 | API key rejected | Re-copy the key: no quotes, no spaces around it. Test it with `/reels2claude:doctor --check-keys`. |
@@ -147,7 +154,7 @@ your project, so you keep a history of what you've already checked.
 ## How it works
 
 ```
-link or video file
+Instagram link or video file
       │
       ▼
 fetch-reel.mjs ── yt-dlp ──► video (or every carousel slide) + caption
@@ -175,7 +182,7 @@ tests/                   unit tests (node --test)
 node --test "tests/*.test.mjs"                      # unit tests
 node skills/reel/scripts/doctor.mjs --check-keys    # setup check
 node skills/reel/scripts/install-whisper.mjs        # whisper.cpp + model (--model small|base|tiny)
-node skills/reel/scripts/fetch-reel.mjs <reel link or video file>
+node skills/reel/scripts/fetch-reel.mjs <Instagram link or video file>
 claude plugin validate --strict .                   # plugin manifest check
 claude --plugin-dir .                               # run Claude Code with this checkout loaded
 ```
